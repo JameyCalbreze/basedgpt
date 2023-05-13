@@ -1,73 +1,47 @@
-use std::ops::Deref;
-use std::sync::Arc;
-use async_openai::{
-    Client as OpenAiClient
-};
+use crate::util::openai_utils::remove_message_prefix;
 use async_openai::types::{CreateImageRequestArgs, ImageData, ImageSize, ResponseFormat};
+use async_openai::Client as OpenAiClient;
 use serenity::client::Context;
 use serenity::framework::standard::CommandResult;
 use serenity::model::channel::Message;
-use serenity::model::user::User;
-use crate::util::openai_utils::remove_message_prefix;
+use std::ops::Deref;
+use std::sync::Arc;
 
 pub async fn handle_image_command(ctx: &Context, msg: &Message) -> CommandResult {
-
     let prompt = remove_message_prefix(&msg.content);
 
-    // Let's hardcode a test image command
     let openai_client = OpenAiClient::new();
-    let response = openai_client.images().create(CreateImageRequestArgs::default()
-        .prompt(prompt)
-        .size(ImageSize::S512x512)
-        .response_format(ResponseFormat::Url)
-        .build()?).await?;
+    let response = openai_client
+        .images()
+        .create(
+            CreateImageRequestArgs::default()
+                // Tracking the discord user id for moderation purposes
+                .user(msg.author.id.to_string())
+                .prompt(prompt)
+                .size(ImageSize::S512x512)
+                .response_format(ResponseFormat::Url)
+                .build()?,
+        )
+        .await;
 
-    let image_url = Arc::clone(&response.data[0]);
-    let image_data = image_url.deref().clone();
-    let url = match image_data {
-        ImageData::Url(v) => {
-            String::from(v.deref())
+    match response {
+        Ok(i) => {
+            log::info!("Call to create image succeeded");
+            let image_url = Arc::clone(&i.data[0]);
+            let image_data = image_url.deref().clone();
+            let url = match image_data {
+                ImageData::Url(v) => String::from(v.deref()),
+                ImageData::B64Json(v) => "".to_string(), // Not Supported
+            };
+            msg.reply(ctx, url).await?;
+            Ok(())
         }
-        ImageData::B64Json(v) => { "".to_string() } // Hard coded for URLs
-    };
-
-    msg.reply(ctx, url).await?;
-
-    Ok(())
-}
-
-pub enum ImageCommandSize {
-    Small,
-    Medium,
-    Large,
-}
-
-impl ImageCommandSize {
-    pub fn to_string(self) -> String {
-        match self {
-            ImageCommandSize::Small  => { String::from("256x256")   }
-            ImageCommandSize::Medium => { String::from("512x512")   }
-            ImageCommandSize::Large  => { String::from("1024x1024") }
-        }
-    }
-}
-
-struct ImageCommand {
-    size: ImageCommandSize,
-    prompt: String,
-    num_images: usize,
-    user: Option<User>
-}
-
-impl ImageCommand {
-    pub fn default() -> ImageCommand {
-        ImageCommand {
-            size: ImageCommandSize::Small,
-            prompt: "".to_string(),
-            num_images: 1,
-            user: None
+        Err(e) => {
+            log::error!("Call to create image failed with {}", e.to_string());
+            let mut error_response = String::from("CreateImage Err: ");
+            error_response.push_str(&e.to_string());
+            msg.reply(ctx, &error_response).await?;
+            Ok(())
         }
     }
 }
-
-
